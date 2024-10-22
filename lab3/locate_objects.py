@@ -1,7 +1,7 @@
-
 import argparse
 import shutil
 import time
+import os
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -11,6 +11,67 @@ from picamera2 import Picamera2, Preview
 from libcamera import Transform
 
 from nms import non_max_suppression_yolov8
+
+output_dir = "imagem_rosto"
+
+# global parameters
+
+cam_high_resolution = (2592, 1944)
+cam_low_resolution = (320, 240)
+thrashold = 0.7
+
+left_eye_index = 1
+right_eye_index = 2
+left_ear_index = 3
+right_ear_index = 4
+left_shoulder_index = 5
+right_shoulder_index = 6
+
+required_keypoints = [
+    left_eye_index, right_eye_index,
+    left_ear_index, right_ear_index,
+    left_shoulder_index, right_shoulder_index
+]
+
+def save_head_region(keypoints, output_path, extra_pixels=20):
+    left_eye_x = keypoints[6 + left_eye_index * 3]
+    left_eye_y = keypoints[6 + left_eye_index * 3 + 1]
+    right_eye_x = keypoints[6 + right_eye_index * 3]
+    right_eye_y = keypoints[6 + right_eye_index * 3 + 1]
+    left_ear_x = keypoints[6 + left_ear_index * 3]
+    left_ear_y = keypoints[6 + left_ear_index * 3 + 1]
+    right_ear_x = keypoints[6 + right_ear_index * 3]
+    right_ear_y = keypoints[6 + right_ear_index * 3 + 1]
+    left_shoulder_x = keypoints[6 + left_shoulder_index * 3]
+    left_shoulder_y = keypoints[6 + left_shoulder_index * 3 + 1]
+    right_shoulder_x = keypoints[6 + right_shoulder_index * 3]
+    right_shoulder_y = keypoints[6 + right_shoulder_index * 3 + 1]
+
+      # Calcular o centro do rosto
+    center_x = (left_eye_x + right_eye_x) / 2
+    center_y = (left_eye_y + right_eye_y) / 2
+
+    # Calcular as coordenadas da região do rosto
+    max_ear_lenght_x = max(abs(left_ear_x - center_x), abs(right_ear_x - center_x))
+    max_shoulder_lenght_y = max(abs(left_shoulder_y - center_y), abs(right_shoulder_y - center_y))
+
+    max_x = center_x + max_ear_lenght_x + extra_pixels
+    max_y = center_y + max_shoulder_lenght_y 
+    min_x = center_x - max_ear_lenght_x - extra_pixels
+    min_y = center_y - max_shoulder_lenght_y
+    
+    min_x_high = min_x * scale_x
+    min_y_high = min_y * scale_y
+    max_x_high = max_x * scale_x
+    max_y_high = max_y * scale_y
+
+    imagem_high = Image.fromarray(picam2.capture_array("main"))
+
+    if imagem_high.mode == 'RGBA':
+      imagem_high = imagem_high.convert('RGB')
+
+    head_region = imagem_high.crop((min_x_high, min_y_high, max_x_high, max_y_high))
+    head_region.save(output_path)
 
 # How many coordinates are present for each box.
 BOX_COORD_NUM = 4
@@ -73,8 +134,11 @@ if __name__ == "__main__":
   if args.camera is not None:
     picam2 = Picamera2(camera_num=args.camera)
     picam2.start_preview(Preview.NULL)
-    config = picam2.create_preview_configuration({
-        "size": (320, 240),
+    config = picam2.create_preview_configuration(main={
+      "size": cam_high_resolution,
+      "format": "BGR888"},
+        lores={
+        "size": cam_low_resolution,
         "format": "BGR888"
     }, transform=Transform(hflip=True, vflip=True))
     picam2.configure(config)
@@ -126,9 +190,12 @@ if __name__ == "__main__":
     if args.camera is None:
       img = Image.open(args.image).resize((input_width, input_height))
     else:
-      img = Image.fromarray(picam2.capture_array()).resize(
+      img = Image.fromarray(picam2.capture_array("lores")).resize(
           size=(input_width, input_height), resample=Image.Resampling.LANCZOS)
 
+    scale_x = 2592 / input_width
+    scale_y = 1944 / input_height
+    
     if args.save_input is not None:
       img.save("new_" + args.save_input)
       # Do a file move to reduce flicker in VS Code.
@@ -227,11 +294,12 @@ if __name__ == "__main__":
             # print("k_y: ", k_y)
             img_draw.arc((k_x - 1, k_y - 1, k_x + 1, k_y + 1),
                          start=0, end=360, fill="red")
+
             if (i == 10):
               right_hand = [k_x, k_y]
             if (i == 9):
               left_hand = [k_x, k_y]
-              
+
               # img_draw.text((k_x, k_y), f"([{i}] {k_x:.0f},{k_y:.0f})", fill=(0, 0, 0))
             # img_draw.text((k_x, k_y), f"([{i}] {k_x:.0f},{k_y:.0f})", fill=(0, 0, 0))
           print("REL_X: ", abs(right_hand[0] - left_hand[0])/w)
@@ -248,6 +316,9 @@ if __name__ == "__main__":
           else:
             print("Mãos separadas")
             img_draw.text((right_x-15, top_y), "MS", fill=(0, 0, 255))
+
+      if score > thrashold:
+        save_head_region(box, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
 
     if args.save_output is not None:
       img.save("new_" + args.save_output)
