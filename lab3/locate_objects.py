@@ -1,15 +1,20 @@
 import argparse
+import datetime
+import io
 import shutil
 import time
 import os
+import base64
+import json
+from queue import Queue
+import threading
+import requests
 
 import numpy as np
 from PIL import Image, ImageDraw
 import tflite_runtime.interpreter as tflite
 
-from picamera2 import Picamera2, Preview
-from libcamera import Transform
-
+import cv2
 from nms import non_max_suppression_yolov8
 
 output_dir = "imagem_rosto"
@@ -19,6 +24,11 @@ output_dir = "imagem_rosto"
 cam_high_resolution = (2592, 1944)
 cam_low_resolution = (320, 240)
 thrashold = 0.7
+
+# fila com as matrizes do rosto
+dados_rosto = Queue()
+
+output_file = "data_rosto.json"
 
 left_eye_index = 1
 right_eye_index = 2
@@ -33,45 +43,77 @@ required_keypoints = [
     left_shoulder_index, right_shoulder_index
 ]
 
-def save_head_region(keypoints, output_path, extra_pixels=20):
-    left_eye_x = keypoints[6 + left_eye_index * 3]
-    left_eye_y = keypoints[6 + left_eye_index * 3 + 1]
-    right_eye_x = keypoints[6 + right_eye_index * 3]
-    right_eye_y = keypoints[6 + right_eye_index * 3 + 1]
-    left_ear_x = keypoints[6 + left_ear_index * 3]
-    left_ear_y = keypoints[6 + left_ear_index * 3 + 1]
-    right_ear_x = keypoints[6 + right_ear_index * 3]
-    right_ear_y = keypoints[6 + right_ear_index * 3 + 1]
-    left_shoulder_x = keypoints[6 + left_shoulder_index * 3]
-    left_shoulder_y = keypoints[6 + left_shoulder_index * 3 + 1]
-    right_shoulder_x = keypoints[6 + right_shoulder_index * 3]
-    right_shoulder_y = keypoints[6 + right_shoulder_index * 3 + 1]
+def save_head_region(imagem_high, keypoints, output_path, extra_pixels=20):
+  left_eye_x = keypoints[6 + left_eye_index * 3]
+  left_eye_y = keypoints[6 + left_eye_index * 3 + 1]
+  right_eye_x = keypoints[6 + right_eye_index * 3]
+  right_eye_y = keypoints[6 + right_eye_index * 3 + 1]
+  left_ear_x = keypoints[6 + left_ear_index * 3]
+  right_ear_x = keypoints[6 + right_ear_index * 3]
+  left_shoulder_y = keypoints[6 + left_shoulder_index * 3 + 1]
+  right_shoulder_y = keypoints[6 + right_shoulder_index * 3 + 1]
 
-      # Calcular o centro do rosto
-    center_x = (left_eye_x + right_eye_x) / 2
-    center_y = (left_eye_y + right_eye_y) / 2
+    # Calcular o centro do rosto
+  center_x = (left_eye_x + right_eye_x) / 2
+  center_y = (left_eye_y + right_eye_y) / 2
 
-    # Calcular as coordenadas da região do rosto
-    max_ear_lenght_x = max(abs(left_ear_x - center_x), abs(right_ear_x - center_x))
-    max_shoulder_lenght_y = max(abs(left_shoulder_y - center_y), abs(right_shoulder_y - center_y))
+  # Calcular as coordenadas da região do rosto
+  max_ear_lenght_x = max(abs(left_ear_x - center_x), abs(right_ear_x - center_x))
+  max_shoulder_lenght_y = max(abs(left_shoulder_y - center_y), abs(right_shoulder_y - center_y))
 
-    max_x = center_x + max_ear_lenght_x + extra_pixels
-    max_y = center_y + max_shoulder_lenght_y 
-    min_x = center_x - max_ear_lenght_x - extra_pixels
-    min_y = center_y - max_shoulder_lenght_y
-    
-    min_x_high = min_x * scale_x
-    min_y_high = min_y * scale_y
-    max_x_high = max_x * scale_x
-    max_y_high = max_y * scale_y
+  max_x = center_x + max_ear_lenght_x + extra_pixels
+  max_y = center_y + max_shoulder_lenght_y 
+  min_x = center_x - max_ear_lenght_x - extra_pixels
+  min_y = center_y - max_shoulder_lenght_y
+  
+  min_x_high = min_x #* scale_x
+  min_y_high = min_y #* scale_y
+  max_x_high = max_x #* scale_x
+  max_y_high = max_y #* scale_y
 
-    imagem_high = Image.fromarray(picam2.capture_array("main"))
+  ##################################################################################
+  
+  ##################################################################################
 
-    if imagem_high.mode == 'RGBA':
-      imagem_high = imagem_high.convert('RGB')
+  if imagem_high.mode == 'RGBA':
+    imagem_high = imagem_high.convert('RGB')
 
-    head_region = imagem_high.crop((min_x_high, min_y_high, max_x_high, max_y_high))
-    head_region.save(output_path)
+  head_region = imagem_high.crop((min_x_high, min_y_high, max_x_high, max_y_high))
+
+  # Converter para base64
+  buffered = io.BytesIO()
+  head_region.save(buffered, format="JPEG")
+  img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+  # Obter a hora atual formatada como "HH:MM:SS"
+  timestamp = time.time()
+
+  # Dados do rosto a serem salvos
+  face_data = {
+      "time": timestamp,
+      "base64_image": img_base64
+  }
+
+  face_data2 = {
+      "qtd": dados_rosto.qsize()
+  }
+
+  dados_rosto.put(face_data)
+
+  # Carregar dados existentes do arquivo (se houver)
+  try:
+      with open(output_file, "r") as infile:
+          all_faces = json.load(infile)
+  except FileNotFoundError:
+      # Se o arquivo não existir, inicializar uma lista vazia
+      all_faces = []
+
+  # Adicionar o novo rosto à lista
+  all_faces.append(face_data2)
+
+  # Salvar os dados atualizados de volta no arquivo
+  with open(output_file, "w") as outfile:
+      json.dump(all_faces, outfile, indent=4)
 
 # How many coordinates are present for each box.
 BOX_COORD_NUM = 4
@@ -86,65 +128,11 @@ def load_labels(filename):
     return [line.strip() for line in f.readlines()]
 
 
-if __name__ == "__main__":
-  parser = argparse.ArgumentParser()
-  parser.add_argument(
-      "-i",
-      "--image",
-      default="../images/bus.jpg",
-      help="Input image")
-  parser.add_argument(
-      "-m",
-      "--model_file",
-      default="../models/yolov8n_224_int8.tflite",
-      help="TF Lite model to be executed")
-  parser.add_argument(
-      "-l",
-      "--label_file",
-      default="../models/yolov8_labels.txt",
-      help="name of file containing labels")
-  parser.add_argument(
-      "--input_mean",
-      default=0.0, type=float,
-      help="input_mean")
-  parser.add_argument(
-      "--input_std",
-      default=255.0, type=float,
-      help="input standard deviation")
-  parser.add_argument(
-      "--num_threads", default=2, type=int, help="number of threads")
-  parser.add_argument(
-      "--camera", default=None, type=int, help="Pi camera device to use")
-  parser.add_argument(
-      "--save_input", default=None, help="Image file to save model input to")
-  parser.add_argument(
-      "--save_output", default=None, help="Image file to save model output to")
-  parser.add_argument(
-      "--score_threshold",
-      default=0.6, type=float,
-      help="Score level needed to include results")
-  parser.add_argument(
-      "--output_format",
-      default="yolov8_detect",
-      help="How to interpret the output from the model"
-  )
-
-  args = parser.parse_args()
-
+def faceDetect():
   if args.camera is not None:
-    picam2 = Picamera2(camera_num=args.camera)
-    picam2.start_preview(Preview.NULL)
-    config = picam2.create_preview_configuration(main={
-      "size": cam_high_resolution,
-      "format": "BGR888"},
-        lores={
-        "size": cam_low_resolution,
-        "format": "BGR888"
-    }, transform=Transform(hflip=True, vflip=True))
-    picam2.configure(config)
-
-    picam2.start()
-
+    ##################################################################################
+    cap = cv2.VideoCapture(args.camera)  # Usando OpenCV para capturar da câmera USB
+    ##################################################################################
   interpreter = tflite.Interpreter(
       model_path=args.model_file,
       num_threads=args.num_threads)
@@ -190,11 +178,17 @@ if __name__ == "__main__":
     if args.camera is None:
       img = Image.open(args.image).resize((input_width, input_height))
     else:
-      img = Image.fromarray(picam2.capture_array("lores")).resize(
-          size=(input_width, input_height), resample=Image.Resampling.LANCZOS)
+      ##################################################################################
+      ret, frame = cap.read()
+      if not ret:
+        print("Failed to grab frame")
+        break
+      frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+      img = Image.fromarray(frame_rgb).resize((input_width, input_height), resample=Image.Resampling.LANCZOS)
+      ##################################################################################
 
-    scale_x = 2592 / input_width
-    scale_y = 1944 / input_height
+    scale_x = 1#2592 / input_width
+    scale_y = 1#1944 / input_height
     
     if args.save_input is not None:
       img.save("new_" + args.save_input)
@@ -318,7 +312,7 @@ if __name__ == "__main__":
             img_draw.text((right_x-15, top_y), "MS", fill=(0, 0, 255))
 
       if score > thrashold:
-        save_head_region(box, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
+        save_head_region(img, box, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
 
     if args.save_output is not None:
       img.save("new_" + args.save_output)
@@ -328,4 +322,69 @@ if __name__ == "__main__":
     print("time: {:.3f}ms".format((stop_time - start_time) * 1000))
 
     if args.camera is None:
-      break
+      ##################################################################################
+      cap.release()
+      ##################################################################################
+
+def sendFaceData():
+  while True:
+    try:
+      item = dados_rosto.get(timeout=1)  # Use timeout para evitar bloqueio
+      response = requests.post('http://192.168.15.6:8000/upload', json=item)  # Use json=item para enviar os dados como JSON
+    except dados_rosto.empty():
+      # Não faz nada se a fila estiver vazia, apenas aguarda
+      continue
+    except requests.exceptions.RequestException as e:
+      print(f"Erro ao enviar dados: {e}")
+
+if __name__ == "__main__":
+
+  parser = argparse.ArgumentParser()
+  parser.add_argument(
+      "-i",
+      "--image",
+      default="../images/bus.jpg",
+      help="Input image")
+  parser.add_argument(
+      "-m",
+      "--model_file",
+      default="../models/yolov8n_224_int8.tflite",
+      help="TF Lite model to be executed")
+  parser.add_argument(
+      "-l",
+      "--label_file",
+      default="../models/yolov8_labels.txt",
+      help="name of file containing labels")
+  parser.add_argument(
+      "--input_mean",
+      default=0.0, type=float,
+      help="input_mean")
+  parser.add_argument(
+      "--input_std",
+      default=255.0, type=float,
+      help="input standard deviation")
+  parser.add_argument(
+      "--num_threads", default=2, type=int, help="number of threads")
+  parser.add_argument(
+      "--camera", default=None, type=int, help="Pi camera device to use")
+  parser.add_argument(
+      "--save_input", default=None, help="Image file to save model input to")
+  parser.add_argument(
+      "--save_output", default=None, help="Image file to save model output to")
+  parser.add_argument(
+      "--score_threshold",
+      default=0.6, type=float,
+      help="Score level needed to include results")
+  parser.add_argument(
+      "--output_format",
+      default="yolov8_detect",
+      help="How to interpret the output from the model"
+  )
+
+  args = parser.parse_args()
+
+  thread_produtor = threading.Thread(target=faceDetect)
+  thread_consumidor = threading.Thread(target=sendFaceData)
+
+  thread_produtor.start()
+  thread_consumidor.start()
