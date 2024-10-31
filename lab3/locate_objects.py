@@ -23,10 +23,11 @@ output_dir = "imagem_rosto"
 
 cam_high_resolution = (2592, 1944)
 cam_low_resolution = (320, 240)
-thrashold = 0.7
+threshold = 0.7
+keypoint_confidence_threshold = 0.5
 
 # fila com as matrizes do rosto
-dados_rosto = Queue()
+face_data_queue = Queue()
 
 output_file = "data_rosto.json"
 
@@ -36,14 +37,17 @@ left_ear_index = 3
 right_ear_index = 4
 left_shoulder_index = 5
 right_shoulder_index = 6
+left_foot_index = 15
+right_foot_index = 16 
 
 required_keypoints = [
     left_eye_index, right_eye_index,
     left_ear_index, right_ear_index,
-    left_shoulder_index, right_shoulder_index
+    left_shoulder_index, right_shoulder_index,
+    #left_foot_index, right_foot_index
 ]
 
-def save_head_region(imagem_high, keypoints, output_path, extra_pixels=20):
+def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixels=0):
   left_eye_x = keypoints[6 + left_eye_index * 3]
   left_eye_y = keypoints[6 + left_eye_index * 3 + 1]
   right_eye_x = keypoints[6 + right_eye_index * 3]
@@ -80,13 +84,12 @@ def save_head_region(imagem_high, keypoints, output_path, extra_pixels=20):
 
   head_region = imagem_high.crop((min_x_high, min_y_high, max_x_high, max_y_high))
 
+  head_region.save(output_path)
+
   # Converter para base64
   buffered = io.BytesIO()
   head_region.save(buffered, format="JPEG")
-  img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-  # Obter a hora atual formatada como "HH:MM:SS"
-  timestamp = time.time()
+  img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8") 
 
   # Dados do rosto a serem salvos
   face_data = {
@@ -95,10 +98,10 @@ def save_head_region(imagem_high, keypoints, output_path, extra_pixels=20):
   }
 
   face_data2 = {
-      "qtd": dados_rosto.qsize()
+      "qtd": face_data_queue.qsize()
   }
 
-  dados_rosto.put(face_data)
+  face_data_queue.put(face_data)
 
   # Carregar dados existentes do arquivo (se houver)
   try:
@@ -180,6 +183,7 @@ def faceDetect():
     else:
       ##################################################################################
       ret, frame = cap.read()
+      timestamp = time.time()
       if not ret:
         print("Failed to grab frame")
         break
@@ -204,6 +208,7 @@ def faceDetect():
     interpreter.set_tensor(input_details[0]["index"], input_data)
 
     start_time = time.time()
+
     interpreter.invoke()
     
 
@@ -245,6 +250,8 @@ def faceDetect():
       img_draw = ImageDraw.Draw(img)
 
     for box in clean_boxes:
+      keypoint_references = [box[6 + i * 3] for i in required_keypoints]
+      keypoint_confidences = [box[8 + i * 3] for i in required_keypoints]
       # print("Box: ", box)
       # Convert from yolov8 coords to OpenCV coords.
       center_x = box[0] * input_width
@@ -301,18 +308,20 @@ def faceDetect():
           print("DIF_X: ", abs(right_hand[0] - left_hand[0]))
           print("DIF_Y: ", abs(right_hand[1] - left_hand[1]))
           print("W: ", w)
+          hands_together = ((abs(right_hand[0] - left_hand[0])/w)<0.4) and ((abs(right_hand[1] - left_hand[1])/h)<0.1)
           if (w <= 38):
             print("Pessoa distante")
             img_draw.text((right_x-15, top_y), "FORA", fill=(255, 0, 0))
-          elif (((abs(right_hand[0] - left_hand[0])/w)<0.4) and ((abs(right_hand[1] - left_hand[1])/h)<0.1)):
+          elif (hands_together):
             print("Mãos juntas")
             img_draw.text((right_x-15, top_y), "MJ", fill=(0, 0, 0))
           else:
             print("Mãos separadas")
             img_draw.text((right_x-15, top_y), "MS", fill=(0, 0, 255))
-
-      if score > thrashold:
-        save_head_region(img, box, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
+      print(input_height, input_width)
+      if score > threshold and all(keypoint_references) and all(conf >= keypoint_confidence_threshold for conf in keypoint_confidences):
+        if hands_together:#box[6 + 15 * 3 + 1] > (6*input_height/7) and box[6 + 16 * 3 + 1] > (6*input_height/7):
+          save_head_region(img, box, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
 
     if args.save_output is not None:
       img.save("new_" + args.save_output)
@@ -329,9 +338,9 @@ def faceDetect():
 def sendFaceData():
   while True:
     try:
-      item = dados_rosto.get(timeout=1)  # Use timeout para evitar bloqueio
-      response = requests.post('http://192.168.15.6:8000/upload', json=item)  # Use json=item para enviar os dados como JSON
-    except dados_rosto.empty():
+      item = face_data_queue.get()  # Use timeout para evitar bloqueio
+      response = requests.post('http://192.168.0.87:8000/upload', json=item, timeout=5)  # Use json=item para enviar os dados como JSON
+    except face_data_queue.empty():
       # Não faz nada se a fila estiver vazia, apenas aguarda
       continue
     except requests.exceptions.RequestException as e:
@@ -383,8 +392,8 @@ if __name__ == "__main__":
 
   args = parser.parse_args()
 
-  thread_produtor = threading.Thread(target=faceDetect)
-  thread_consumidor = threading.Thread(target=sendFaceData)
+  thread_productor = threading.Thread(target=faceDetect)
+  thread_consummer = threading.Thread(target=sendFaceData)
 
-  thread_produtor.start()
-  thread_consumidor.start()
+  thread_productor.start()
+  thread_consummer.start()
