@@ -30,7 +30,8 @@ roi_defined = False
 roi_coords = (0,0,0,0)
 
 # fila com as matrizes do rosto
-face_data_queue = Queue()
+face_data_queue_ROI = Queue()
+face_data_queue_hands = Queue()
 
 output_file = "data_rosto.json"
 
@@ -57,14 +58,14 @@ def define_roi(frame):
     global roi_defined, roi_coords
 
     # Coordenadas do retângulo inicial (você pode ajustar conforme necessário)
-    x, y, w, h = 20, 20, 500, 500  # exemplo de posição e tamanho
+    x, y, w, h = 20, 20, 600, 600  # exemplo de posição e tamanho
 
     # Desenha o retângulo no primeiro frame
     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
     roi_coords = (x, y, w, h)
     roi_defined = True
 
-def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixels=0):
+def save_head_region(imagem_high, keypoints, face_data_aux, timestamp, output_path, extra_pixels=0):
   left_eye_x = keypoints[6 + left_eye_index * 3]
   left_eye_y = keypoints[6 + left_eye_index * 3 + 1]
   right_eye_x = keypoints[6 + right_eye_index * 3]
@@ -115,10 +116,10 @@ def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixel
   }
 
   face_data2 = {
-      "qtd": face_data_queue.qsize()
+      "qtd": face_data_aux.qsize()
   }
 
-  face_data_queue.put(face_data)
+  face_data_aux.put(face_data)
 
   # Carregar dados existentes do arquivo (se houver)
   try:
@@ -294,8 +295,7 @@ def faceDetect():
       class_label = class_labels[class_index]
       right_hand = []
       left_hand = []
-      print(
-          f"{class_label}: {score:.2f} ({center_x:.0f}, {center_y:.0f}) {w:.0f}x{h:.0f}")
+      #print(f"{class_label}: {score:.2f} ({center_x:.0f}, {center_y:.0f}) {w:.0f}x{h:.0f}")
       if args.save_output is not None:
         img_draw.rectangle(((left_x, top_y), (right_x, bottom_y)), fill=None)
         img_draw.text((left_x, top_y), f"{class_label} {score:.2f}", fill=(0, 255, 255))
@@ -328,12 +328,15 @@ def faceDetect():
 
               # img_draw.text((k_x, k_y), f"([{i}] {k_x:.0f},{k_y:.0f})", fill=(0, 0, 0))
             # img_draw.text((k_x, k_y), f"([{i}] {k_x:.0f},{k_y:.0f})", fill=(0, 0, 0))
+          '''
           print("REL_X: ", abs(right_hand[0] - left_hand[0])/w)
           print("REL_Y: ", abs(right_hand[1] - left_hand[1])/h)
           print("DIF_X: ", abs(right_hand[0] - left_hand[0]))
           print("DIF_Y: ", abs(right_hand[1] - left_hand[1]))
           print("W: ", w)
+          '''
           hands_together = ((abs(right_hand[0] - left_hand[0])/w)<0.4) and ((abs(right_hand[1] - left_hand[1])/h)<0.1)
+          '''
           if (w <= 38):
             print("Pessoa distante")
             img_draw.text((right_x-15, top_y), "FORA", fill=(255, 0, 0))
@@ -343,32 +346,43 @@ def faceDetect():
           else:
             print("Mãos separadas")
             img_draw.text((right_x-15, top_y), "MS", fill=(0, 0, 255))
-      print(input_height, input_width)
+            '''
       if score > threshold and all(keypoint_references) and all(conf >= keypoint_confidence_threshold for conf in keypoint_confidences):
-        if(left_x >= roi_coords[0] and top_y >= roi_coords[1] and
-            right_x <= roi_coords[0] + roi_coords[2] and
-            bottom_y <= roi_coords[1] + roi_coords[3]):
-          save_head_region(img, box, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
-          break
+        print(box[6 + 1 * 3] - box[6 + 2 * 3])
+        if(left_x >= roi_coords[0] and top_y >= roi_coords[1] and right_x <= roi_coords[0] + roi_coords[2] and bottom_y <= roi_coords[1] + roi_coords[3]):
+            save_head_region(img, box, face_data_queue_ROI, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
+        if hands_together:
+          save_head_region(img, box, face_data_queue_hands, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
 
     if args.save_output is not None:
       img.save("new_" + args.save_output)
       shutil.move("new_" + args.save_output, args.save_output)
 
     stop_time = time.time()
-    print("time: {:.3f}ms".format((stop_time - start_time) * 1000))
+    #print("time: {:.3f}ms".format((stop_time - start_time) * 1000))
 
     if args.camera is None:
       ##################################################################################
       cap.release()
       ##################################################################################
 
-def sendFaceData():
+def sendFaceData_ROI():
   while True:
     try:
-      item = face_data_queue.get()  # Use timeout para evitar bloqueio
-      response = requests.post('http://192.168.0.87:8000/upload', json=item, timeout=5)  # Use json=item para enviar os dados como JSON
-    except face_data_queue.empty():
+      item = face_data_queue_ROI.get()  # Use timeout para evitar bloqueio
+      response = requests.post('http://192.168.0.87:8000/upload_ROI', json=item, timeout=5)  # Use json=item para enviar os dados como JSON
+    except face_data_queue_ROI.empty():
+      # Não faz nada se a fila estiver vazia, apenas aguarda
+      continue
+    except requests.exceptions.RequestException as e:
+      print(f"Erro ao enviar dados: {e}")
+
+def sendFaceData_hands():
+  while True:
+    try:
+      item = face_data_queue_hands.get()  # Use timeout para evitar bloqueio
+      response = requests.post('http://192.168.0.87:8000/upload_maos', json=item, timeout=5)  # Use json=item para enviar os dados como JSON
+    except face_data_queue_hands.empty():
       # Não faz nada se a fila estiver vazia, apenas aguarda
       continue
     except requests.exceptions.RequestException as e:
@@ -421,7 +435,9 @@ if __name__ == "__main__":
   args = parser.parse_args()
 
   thread_productor = threading.Thread(target=faceDetect)
-  thread_consummer = threading.Thread(target=sendFaceData)
+  thread_consummer_ROI = threading.Thread(target=sendFaceData_ROI)
+  thread_consummer_hands = threading.Thread(target=sendFaceData_hands)
 
   thread_productor.start()
-  thread_consummer.start()
+  thread_consummer_ROI.start()
+  thread_consummer_hands.start()
