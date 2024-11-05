@@ -26,6 +26,9 @@ cam_low_resolution = (320, 240)
 threshold = 0.7
 keypoint_confidence_threshold = 0.5
 
+roi_defined = False
+roi_coords = (0,0,0,0)
+
 # fila com as matrizes do rosto
 face_data_queue = Queue()
 
@@ -46,6 +49,20 @@ required_keypoints = [
     left_shoulder_index, right_shoulder_index,
     #left_foot_index, right_foot_index
 ]
+
+def define_roi(frame):
+    """
+    Define a região de interesse (ROI) desenhando um retângulo vermelho no primeiro frame.
+    """
+    global roi_defined, roi_coords
+
+    # Coordenadas do retângulo inicial (você pode ajustar conforme necessário)
+    x, y, w, h = 20, 20, 500, 500  # exemplo de posição e tamanho
+
+    # Desenha o retângulo no primeiro frame
+    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+    roi_coords = (x, y, w, h)
+    roi_defined = True
 
 def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixels=0):
   left_eye_x = keypoints[6 + left_eye_index * 3]
@@ -187,6 +204,14 @@ def faceDetect():
       if not ret:
         print("Failed to grab frame")
         break
+      
+      if not roi_defined:
+          define_roi(frame)
+      else:
+          # Desenha o retângulo nos frames subsequentes
+          a, b, c, d = roi_coords
+          cv2.rectangle(frame, (a, b), (a + c, b + d), (0, 0, 255), 2)
+
       frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
       img = Image.fromarray(frame_rgb).resize((input_width, input_height), resample=Image.Resampling.LANCZOS)
       ##################################################################################
@@ -320,8 +345,11 @@ def faceDetect():
             img_draw.text((right_x-15, top_y), "MS", fill=(0, 0, 255))
       print(input_height, input_width)
       if score > threshold and all(keypoint_references) and all(conf >= keypoint_confidence_threshold for conf in keypoint_confidences):
-        if hands_together:#box[6 + 15 * 3 + 1] > (6*input_height/7) and box[6 + 16 * 3 + 1] > (6*input_height/7):
+        if(left_x >= roi_coords[0] and top_y >= roi_coords[1] and
+            right_x <= roi_coords[0] + roi_coords[2] and
+            bottom_y <= roi_coords[1] + roi_coords[3]):
           save_head_region(img, box, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
+          break
 
     if args.save_output is not None:
       img.save("new_" + args.save_output)
