@@ -27,11 +27,12 @@ threshold = 0.7
 keypoint_confidence_threshold = 0.5
 
 roi_defined = False
-roi_coords = (0,0,0,0)
+roi_coords = (10, 10, 170, 170)
 
 # fila com as matrizes do rosto
 face_data_queue_ROI = Queue()
 face_data_queue_hands = Queue()
+face_data_aux = Queue()
 
 output_file = "data_rosto.json"
 
@@ -55,17 +56,15 @@ def define_roi(frame):
     """
     Define a região de interesse (ROI) desenhando um retângulo vermelho no primeiro frame.
     """
-    global roi_defined, roi_coords
-
-    # Coordenadas do retângulo inicial (você pode ajustar conforme necessário)
-    x, y, w, h = 20, 20, 600, 600  # exemplo de posição e tamanho
+    global roi_defined
 
     # Desenha o retângulo no primeiro frame
+    (x, y, w, h) = roi_coords
     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
-    roi_coords = (x, y, w, h)
     roi_defined = True
 
-def save_head_region(imagem_high, keypoints, face_data_aux, timestamp, output_path, extra_pixels=0):
+def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixels=0):
+  global face_data_aux
   left_eye_x = keypoints[6 + left_eye_index * 3]
   left_eye_y = keypoints[6 + left_eye_index * 3 + 1]
   right_eye_x = keypoints[6 + right_eye_index * 3]
@@ -102,11 +101,11 @@ def save_head_region(imagem_high, keypoints, face_data_aux, timestamp, output_pa
 
   head_region = imagem_high.crop((min_x_high, min_y_high, max_x_high, max_y_high))
 
-  head_region.save(output_path)
+  #head_region.save(output_path)
 
   # Converter para base64
   buffered = io.BytesIO()
-  head_region.save(buffered, format="JPEG")
+  #head_region.save(buffered, format="JPEG")
   img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8") 
 
   # Dados do rosto a serem salvos
@@ -118,8 +117,6 @@ def save_head_region(imagem_high, keypoints, face_data_aux, timestamp, output_pa
   face_data2 = {
       "qtd": face_data_aux.qsize()
   }
-
-  face_data_aux.put(face_data)
 
   # Carregar dados existentes do arquivo (se houver)
   try:
@@ -135,6 +132,7 @@ def save_head_region(imagem_high, keypoints, face_data_aux, timestamp, output_pa
   # Salvar os dados atualizados de volta no arquivo
   with open(output_file, "w") as outfile:
       json.dump(all_faces, outfile, indent=4)
+  return face_data
 
 # How many coordinates are present for each box.
 BOX_COORD_NUM = 4
@@ -201,6 +199,7 @@ def faceDetect():
     else:
       ##################################################################################
       ret, frame = cap.read()
+      frame = cv2.resize(frame, (input_width, input_height))
       timestamp = time.time()
       if not ret:
         print("Failed to grab frame")
@@ -214,7 +213,7 @@ def faceDetect():
           cv2.rectangle(frame, (a, b), (a + c, b + d), (0, 0, 255), 2)
 
       frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-      img = Image.fromarray(frame_rgb).resize((input_width, input_height), resample=Image.Resampling.LANCZOS)
+      img = Image.fromarray(frame_rgb)
       ##################################################################################
 
     scale_x = 1#2592 / input_width
@@ -298,7 +297,7 @@ def faceDetect():
       #print(f"{class_label}: {score:.2f} ({center_x:.0f}, {center_y:.0f}) {w:.0f}x{h:.0f}")
       if args.save_output is not None:
         img_draw.rectangle(((left_x, top_y), (right_x, bottom_y)), fill=None)
-        img_draw.text((left_x, top_y), f"{class_label} {score:.2f}", fill=(0, 255, 255))
+        #img_draw.text((left_x, top_y), f"{class_label} {score:.2f}", fill=(0, 255, 255))
         if args.output_format == "yolov8_pose":
           for line in POSE_LINES:
             # print("")
@@ -347,12 +346,17 @@ def faceDetect():
             print("Mãos separadas")
             img_draw.text((right_x-15, top_y), "MS", fill=(0, 0, 255))
             '''
+
       if score > threshold and all(keypoint_references) and all(conf >= keypoint_confidence_threshold for conf in keypoint_confidences):
-        print(box[6 + 1 * 3] - box[6 + 2 * 3])
+        #print(box[6 + 1 * 3] - box[6 + 2 * 3])
         if(left_x >= roi_coords[0] and top_y >= roi_coords[1] and right_x <= roi_coords[0] + roi_coords[2] and bottom_y <= roi_coords[1] + roi_coords[3]):
-            save_head_region(img, box, face_data_queue_ROI, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
-        if hands_together:
-          save_head_region(img, box, face_data_queue_hands, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
+          img_draw.text((left_x, top_y), "DENTRO DO LEITO", fill=(120, 0, 255))
+          cutted_face = save_head_region(img, box, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
+          face_data_queue_ROI.put(cutted_face)
+          if hands_together:
+            face_data_queue_hands.put(cutted_face)
+        else:
+          img_draw.text((left_x, top_y), "FORA DO LEITO", fill=(0, 255, 0))
 
     if args.save_output is not None:
       img.save("new_" + args.save_output)
@@ -376,6 +380,8 @@ def sendFaceData_ROI():
       continue
     except requests.exceptions.RequestException as e:
       print(f"Erro ao enviar dados: {e}")
+    except Exception as o:
+        print(f"Erro inesperado: {e}")
 
 def sendFaceData_hands():
   while True:
@@ -387,6 +393,8 @@ def sendFaceData_hands():
       continue
     except requests.exceptions.RequestException as e:
       print(f"Erro ao enviar dados: {e}")
+    except Exception as o:
+        print(f"Erro inesperado: {e}")
 
 if __name__ == "__main__":
 
