@@ -22,20 +22,25 @@ OUTPUT_DIR = "imagem_rosto"
 OUTPUT_FILE = "data_rosto.json"
 
 # parâmetros globais
-CAM_HIGH_RESOLUTION = (2592, 1944)
+CAM_HIGH_RESOLUTION = (1280, 720)
 CAM_LOW_RESOLUTION = (320, 240)
 THRESHOLD = 0.7
+BOX_SCORE = 0.6
+HAND_SCORE = 0.5
+HAND_RELLATIVE_DIFFERENCE = [0.4, 0.1] 
 KEYPOINT_CONFIDENCE_THRESHOLD = 0.5
 ROI_DEFINED = False
-ROI_COORDS = (0, 0, 222, 200)
+ROI_COORDS = (0, 160, 222, 222)
 
-<<<<<<< HEAD
+scale_x = 0
+scale_y = 0
+
 # Endereço do servidor
 ADDRESS = 'http://192.168.0.87:8000/'
 
 # fila com as matrizes do rosto
-face_data_queue_ROI = Queue()
-face_data_queue_hands = Queue()
+face_data_queue_ROI = Queue(maxsize=1000)
+face_data_queue_hands = Queue(maxsize=1000)
 face_data_aux = 0
 
 
@@ -57,124 +62,6 @@ REQUIRED_KEYPOINTS = [
 ]
 
 # Quantas coordenadas estão presentes na box
-=======
-cam_high_resolution = (2592, 1944)
-cam_low_resolution = (320, 240)
-threshold = 0.7
-keypoint_confidence_threshold = 0.5
-
-roi_defined = False
-roi_coords = (0,0,0,0)
-
-# fila com as matrizes do rosto
-face_data_queue_ROI = Queue()
-face_data_queue_hands = Queue()
-
-output_file = "data_rosto.json"
-
-left_eye_index = 1
-right_eye_index = 2
-left_ear_index = 3
-right_ear_index = 4
-left_shoulder_index = 5
-right_shoulder_index = 6
-left_foot_index = 15
-right_foot_index = 16 
-
-required_keypoints = [
-    left_eye_index, right_eye_index,
-    left_ear_index, right_ear_index,
-    left_shoulder_index, right_shoulder_index,
-    #left_foot_index, right_foot_index
-]
-
-def define_roi(frame):
-    """
-    Define a região de interesse (ROI) desenhando um retângulo vermelho no primeiro frame.
-    """
-    global roi_defined, roi_coords
-
-    # Coordenadas do retângulo inicial (você pode ajustar conforme necessário)
-    x, y, w, h = 20, 20, 600, 600  # exemplo de posição e tamanho
-
-    # Desenha o retângulo no primeiro frame
-    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
-    roi_coords = (x, y, w, h)
-    roi_defined = True
-
-def save_head_region(imagem_high, keypoints, face_data_aux, timestamp, output_path, extra_pixels=0):
-  left_eye_x = keypoints[6 + left_eye_index * 3]
-  left_eye_y = keypoints[6 + left_eye_index * 3 + 1]
-  right_eye_x = keypoints[6 + right_eye_index * 3]
-  right_eye_y = keypoints[6 + right_eye_index * 3 + 1]
-  left_ear_x = keypoints[6 + left_ear_index * 3]
-  right_ear_x = keypoints[6 + right_ear_index * 3]
-  left_shoulder_y = keypoints[6 + left_shoulder_index * 3 + 1]
-  right_shoulder_y = keypoints[6 + right_shoulder_index * 3 + 1]
-
-    # Calcular o centro do rosto
-  center_x = (left_eye_x + right_eye_x) / 2
-  center_y = (left_eye_y + right_eye_y) / 2
-
-  # Calcular as coordenadas da região do rosto
-  max_ear_lenght_x = max(abs(left_ear_x - center_x), abs(right_ear_x - center_x))
-  max_shoulder_lenght_y = max(abs(left_shoulder_y - center_y), abs(right_shoulder_y - center_y))
-
-  max_x = center_x + max_ear_lenght_x + extra_pixels
-  max_y = center_y + max_shoulder_lenght_y 
-  min_x = center_x - max_ear_lenght_x - extra_pixels
-  min_y = center_y - max_shoulder_lenght_y
-  
-  min_x_high = min_x #* scale_x
-  min_y_high = min_y #* scale_y
-  max_x_high = max_x #* scale_x
-  max_y_high = max_y #* scale_y
-
-  ##################################################################################
-  
-  ##################################################################################
-
-  if imagem_high.mode == 'RGBA':
-    imagem_high = imagem_high.convert('RGB')
-
-  head_region = imagem_high.crop((min_x_high, min_y_high, max_x_high, max_y_high))
-
-  head_region.save(output_path)
-
-  # Converter para base64
-  buffered = io.BytesIO()
-  head_region.save(buffered, format="JPEG")
-  img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8") 
-
-  # Dados do rosto a serem salvos
-  face_data = {
-      "time": timestamp,
-      "base64_image": img_base64
-  }
-
-  face_data2 = {
-      "qtd": face_data_aux.qsize()
-  }
-
-  face_data_aux.put(face_data)
-
-  # Carregar dados existentes do arquivo (se houver)
-  try:
-      with open(output_file, "r") as infile:
-          all_faces = json.load(infile)
-  except FileNotFoundError:
-      # Se o arquivo não existir, inicializar uma lista vazia
-      all_faces = []
-
-  # Adicionar o novo rosto à lista
-  all_faces.append(face_data2)
-
-  # Salvar os dados atualizados de volta no arquivo
-  with open(output_file, "w") as outfile:
-      json.dump(all_faces, outfile, indent=4)
-
-# How many coordinates are present for each box.
->>>>>>> main
 BOX_COORD_NUM = 4
 
 # Como desenhar o esqueleto a partir dos keypoints 
@@ -196,7 +83,7 @@ def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixel
   """
   Recorta o rosto da imagem capturada 
   """
-  global face_data_aux
+  global face_data_aux, scale_x, scale_y
   # Obter keypoints para o recorte do rosto
   left_eye_x = keypoints[6 + LEFT_EYE_INDEX * 3]
   left_eye_y = keypoints[6 + LEFT_EYE_INDEX * 3 + 1]
@@ -216,19 +103,21 @@ def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixel
   max_shoulder_lenght_y = max(abs(left_shoulder_y - center_y), abs(right_shoulder_y - center_y))
 
   max_x = center_x + max_ear_lenght_x + extra_pixels
-  max_y = center_y + max_shoulder_lenght_y 
+  max_y = center_y + max_shoulder_lenght_y + extra_pixels
   min_x = center_x - max_ear_lenght_x - extra_pixels
-  min_y = center_y - max_shoulder_lenght_y
+  min_y = center_y - max_shoulder_lenght_y - extra_pixels
   
-  min_x_high = min_x #* scale_x
-  min_y_high = min_y #* scale_y
-  max_x_high = max_x #* scale_x
-  max_y_high = max_y #* scale_y
+  min_x_high = min_x * scale_x
+  min_y_high = min_y * scale_y
+  max_x_high = max_x * scale_x
+  max_y_high = max_y * scale_y
 
   if imagem_high.mode == 'RGBA':
     imagem_high = imagem_high.convert('RGB')
 
   head_region = imagem_high.crop((min_x_high, min_y_high, max_x_high, max_y_high))
+
+  head_region.save(output_path)
 
   # Converter para base64
   buffered = io.BytesIO()
@@ -247,7 +136,7 @@ def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixel
 
   # Carregar dados existentes do arquivo (se houver)
   try:
-      with open(output_file, "r") as infile:
+      with open(OUTPUT_FILE, "r") as infile:
           all_faces = json.load(infile)
   except FileNotFoundError:
       # Se o arquivo não existir, inicializar uma lista vazia
@@ -257,7 +146,7 @@ def save_head_region(imagem_high, keypoints, timestamp, output_path, extra_pixel
   all_faces.append(face_data2)
 
   # Salvar os dados atualizados de volta no arquivo
-  with open(output_file, "w") as outfile:
+  with open(OUTPUT_FILE, "w") as outfile:
       json.dump(all_faces, outfile, indent=4)
   return face_data
 
@@ -272,25 +161,22 @@ def faceDetect():
   """
   Método de detecção de rostos
   """
-  global face_data_queue_ROI, face_data_queue_hands
+  global face_data_queue_ROI, face_data_queue_hands, scale_x, scale_y
 
-<<<<<<< HEAD
   fps_start_time = 0
   fps = 0
 
   # Captura de vídeo da câmera
-=======
-def faceDetect():
->>>>>>> main
   if args.camera is not None:
     ##################################################################################
     cap = cv2.VideoCapture(args.camera)  # Usando OpenCV para capturar da câmera USB
+    largura = CAM_HIGH_RESOLUTION[0]  # Exemplo: 1280 pixels de largura
+    altura = CAM_HIGH_RESOLUTION[1]    # Exemplo: 720 pixels de altura
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
     ##################################################################################
-<<<<<<< HEAD
 
   # Carregar o modelo TFLite
-=======
->>>>>>> main
   interpreter = tflite.Interpreter(
       model_path='../models/yolov8n-pose_int8.tflite',
       num_threads=2)
@@ -329,13 +215,14 @@ def faceDetect():
     ##################################################################################
     # Captura de um quadro da câmera
     ret, frame = cap.read()
-
     # Cálculo da taxa de quadros por segundo (FPS)
     fps_end_time = time.time()
     time_diff = fps_end_time - fps_start_time
     fps = 1/(time_diff)
     fps_start_time = fps_end_time
     # print(fps)
+    frame_copy = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    
     frame = cv2.resize(frame, (input_width, input_height))
     timestamp = time.time()
     if not ret:
@@ -343,9 +230,8 @@ def faceDetect():
       break
     # Definindo a região de interesse (ROI) se não estiver definida
     if not ROI_DEFINED:
-        define_roi(frame)
+        roi_drawn(frame)
     else:
-<<<<<<< HEAD
         # Desenha o retângulo nos frames subsequentes
         a, b, c, d = ROI_COORDS
         cv2.rectangle(frame, (a, b), (a + c, b + d), (0, 0, 255), 2)
@@ -354,35 +240,8 @@ def faceDetect():
     img = Image.fromarray(frame_rgb)
     ##################################################################################
     # Calculando a escala da imagem com menos e mais qualidade
-    scale_x = 1#2592 / input_width
-    scale_y = 1#1944 / input_height
-=======
-      ##################################################################################
-      ret, frame = cap.read()
-      timestamp = time.time()
-      if not ret:
-        print("Failed to grab frame")
-        break
-      
-      if not roi_defined:
-          define_roi(frame)
-      else:
-          # Desenha o retângulo nos frames subsequentes
-          a, b, c, d = roi_coords
-          cv2.rectangle(frame, (a, b), (a + c, b + d), (0, 0, 255), 2)
-
-      frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-      img = Image.fromarray(frame_rgb).resize((input_width, input_height), resample=Image.Resampling.LANCZOS)
-      ##################################################################################
-
-    scale_x = 1#2592 / input_width
-    scale_y = 1#1944 / input_height
-    
-    if args.save_input is not None:
-      img.save("new_" + args.save_input)
-      # Do a file move to reduce flicker in VS Code.
-      shutil.move("new_" + args.save_input, args.save_input)
->>>>>>> main
+    scale_x = 1280 / input_width
+    scale_y = 720 / input_height
 
     # Redimensiona a imagem para se adequar à entrada do modelo
     input_data = np.expand_dims(img, axis=0)
@@ -391,7 +250,6 @@ def faceDetect():
 
     interpreter.set_tensor(input_details[0]["index"], input_data)
     start_time = time.time()
-
     interpreter.invoke()
 
     output_data = interpreter.get_tensor(output_details[0]["index"])
@@ -405,9 +263,9 @@ def faceDetect():
       center_y = raw_box[1]
       w = raw_box[2]
       h = raw_box[3]
-
+      
       score = raw_box[BOX_COORD_NUM]
-      if (score > 0.6):
+      if (score > BOX_SCORE):
         coords = [center_x, center_y, w, h, score, 0]
         keypoints = raw_box[BOX_COORD_NUM + 1:]
         boxes.append([*coords, *keypoints])
@@ -421,18 +279,11 @@ def faceDetect():
       img_draw = ImageDraw.Draw(img)
 
     for box in clean_boxes:
-<<<<<<< HEAD
       # Informação dos keypoints que serão usados para recorte do rosto
       keypoint_references = [box[6 + i * 3] for i in REQUIRED_KEYPOINTS]
       keypoint_confidences = [box[8 + i * 3] for i in REQUIRED_KEYPOINTS]
 
       # Salva as coordenadas de cada bounding box capturada na imagem.
-=======
-      keypoint_references = [box[6 + i * 3] for i in required_keypoints]
-      keypoint_confidences = [box[8 + i * 3] for i in required_keypoints]
-      # print("Box: ", box)
-      # Convert from yolov8 coords to OpenCV coords.
->>>>>>> main
       center_x = box[0] * input_width
       center_y = box[1] * input_height
       w = box[2] * input_width
@@ -451,12 +302,8 @@ def faceDetect():
 
       right_hand = []
       left_hand = []
-<<<<<<< HEAD
    
       # Desenhar informações das bounding boxes na imagem
-=======
-      #print(f"{class_label}: {score:.2f} ({center_x:.0f}, {center_y:.0f}) {w:.0f}x{h:.0f}")
->>>>>>> main
       if args.save_output is not None:
         img_draw.rectangle(((left_x, top_y), (right_x, bottom_y)), fill=None)
         for line in POSE_LINES:
@@ -479,79 +326,54 @@ def faceDetect():
           if (i == 9):
             left_hand = [k_x, k_y]
 
-<<<<<<< HEAD
         # Implementação da lógica de mãos juntas 
-        hands_together = ((abs(right_hand[0] - left_hand[0])/w)<0.4) and ((abs(right_hand[1] - left_hand[1])/h)<0.1)
-
-      # Implementação do filtro de imagens borradas
-      if score > THRESHOLD and all(keypoint_references) and all(conf >= KEYPOINT_CONFIDENCE_THRESHOLD for conf in keypoint_confidences):
-        # print(box[6 + 3 * 3] - box[6 + 4 * 3])
-=======
-              # img_draw.text((k_x, k_y), f"([{i}] {k_x:.0f},{k_y:.0f})", fill=(0, 0, 0))
-            # img_draw.text((k_x, k_y), f"([{i}] {k_x:.0f},{k_y:.0f})", fill=(0, 0, 0))
-          '''
-          print("REL_X: ", abs(right_hand[0] - left_hand[0])/w)
-          print("REL_Y: ", abs(right_hand[1] - left_hand[1])/h)
-          print("DIF_X: ", abs(right_hand[0] - left_hand[0]))
-          print("DIF_Y: ", abs(right_hand[1] - left_hand[1]))
-          print("W: ", w)
-          '''
-          hands_together = ((abs(right_hand[0] - left_hand[0])/w)<0.4) and ((abs(right_hand[1] - left_hand[1])/h)<0.1)
-          '''
-          if (w <= 38):
-            print("Pessoa distante")
-            img_draw.text((right_x-15, top_y), "FORA", fill=(255, 0, 0))
-          elif (hands_together):
-            print("Mãos juntas")
-            img_draw.text((right_x-15, top_y), "MJ", fill=(0, 0, 0))
-          else:
-            print("Mãos separadas")
-            img_draw.text((right_x-15, top_y), "MS", fill=(0, 0, 255))
-            '''
-      if score > threshold and all(keypoint_references) and all(conf >= keypoint_confidence_threshold for conf in keypoint_confidences):
-        print(box[6 + 1 * 3] - box[6 + 2 * 3])
-        if(left_x >= roi_coords[0] and top_y >= roi_coords[1] and right_x <= roi_coords[0] + roi_coords[2] and bottom_y <= roi_coords[1] + roi_coords[3]):
-            save_head_region(img, box, face_data_queue_ROI, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
-        if hands_together:
-          save_head_region(img, box, face_data_queue_hands, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
->>>>>>> main
-
-        # Implementação da lógica de dentro ou fora do leito
-        # if((box[6 + 3 * 3] - box[6 + 4 * 3]) > 21):
-        if(left_x < ROI_COORDS[0] or top_y < ROI_COORDS[1] or right_x > ROI_COORDS[0] + ROI_COORDS[2] or bottom_y > ROI_COORDS[1] + ROI_COORDS[3]) and ((box[6 + 3 * 3] - box[6 + 4 * 3]) > 21):
-          img_draw.text((left_x, top_y), "FORA DO LEITO", fill=(120, 0, 255))
+        hands_together = (abs(right_hand[0] - left_hand[0])/w)<HAND_RELLATIVE_DIFFERENCE[0] and ((abs(right_hand[1] - left_hand[1])/h)<HAND_RELLATIVE_DIFFERENCE[1])
+        
+      # Implementação da lógica de dentro ou fora do leito
+      # if((box[6 + 3 * 3] - box[6 + 4 * 3]) > 21):
+      if((left_x > ROI_COORDS[0] and left_x < ROI_COORDS[0] + ROI_COORDS[2] and top_y < ROI_COORDS[1] + ROI_COORDS[3] and top_y > ROI_COORDS[1]) 
+      or (left_x > ROI_COORDS[0] and left_x < ROI_COORDS[0] + ROI_COORDS[2] and bottom_y < ROI_COORDS[1] + ROI_COORDS[3] and bottom_y > ROI_COORDS[1]) 
+      or (right_x > ROI_COORDS[0] and right_x < ROI_COORDS[0] + ROI_COORDS[2] and top_y < ROI_COORDS[1] + ROI_COORDS[3] and top_y > ROI_COORDS[1]) 
+      or (right_x > ROI_COORDS[0] and right_x < ROI_COORDS[0] + ROI_COORDS[2] and bottom_y < ROI_COORDS[1] + ROI_COORDS[3] and bottom_y > ROI_COORDS[1])
+      or (right_x > ROI_COORDS[0] and right_x < ROI_COORDS[0] + ROI_COORDS[2] and bottom_y > ROI_COORDS[1] + ROI_COORDS[3] and top_y < ROI_COORDS[1])
+      or (left_x > ROI_COORDS[0] and left_x < ROI_COORDS[0] + ROI_COORDS[2] and bottom_y > ROI_COORDS[1] + ROI_COORDS[3] and top_y < ROI_COORDS[1])
+      or (left_x < ROI_COORDS[0] and right_x > ROI_COORDS[0] + ROI_COORDS[2] and top_y < ROI_COORDS[1] + ROI_COORDS[3] and top_y > ROI_COORDS[1])
+      or (left_x < ROI_COORDS[0] and right_x > ROI_COORDS[0] + ROI_COORDS[2] and bottom_y < ROI_COORDS[1] + ROI_COORDS[3] and bottom_y > ROI_COORDS[1])): #and ((box[6 + 3 * 3] - box[6 + 4 * 3]) > 21):
+      #if(left_x < ROI_COORDS[0] or top_y < ROI_COORDS[1] or right_x > ROI_COORDS[0] + ROI_COORDS[2] or bottom_y > ROI_COORDS[1] + ROI_COORDS[3]) and ((box[6 + 3 * 3] - box[6 + 4 * 3]) > 21):
+        img_draw.text((left_x, top_y), "DENTRO DO LEITO", fill=(120, 0, 255))
+        
+        # Implementação do filtro de imagens borradas
+        if score > THRESHOLD and all(keypoint_references) and all(conf >= KEYPOINT_CONFIDENCE_THRESHOLD for conf in keypoint_confidences):
           # Método de recortar a face
-          cutted_face = save_head_region(img, box, timestamp, f"imagem_rosto/head_{int(time.time() * 1000)}.jpg")
+          cutted_face = save_head_region(frame_copy, box, timestamp, f"imagem_rosto_ROI/head_{int(time.time() * 1000)}.jpeg")
 
           # Salvar na fila de pessoas dentro do leito
           face_data_queue_ROI.put(cutted_face)
 
-          if hands_together:
-            # Salvar na fila de pessoa higienizadas
-            face_data_queue_hands.put(cutted_face)
+        if hands_together and box[6 + (9 * 3) + 2] > HAND_SCORE and box[6 + (10 * 3) + 2] > HAND_SCORE and box[6 + 3 * 3] - box[6 + 4 * 3] > 2:
+          img_draw.text((left_x+20, top_y), "MAOS JUNTAS", fill=(120, 150, 30))
+
+          cutted_face = save_head_region(frame_copy, box, timestamp, f"imagem_rosto_hand/head_{int(time.time() * 1000)}.jpg", 10)
+
+          # Salvar na fila de pessoa higienizadas
+          face_data_queue_hands.put(cutted_face)
         
-        else:
-          img_draw.text((left_x, top_y), "DENTRO DO LEITO", fill=(0, 255, 0))
+      else:
+        img_draw.text((left_x, top_y), "FORA DO LEITO", fill=(0, 255, 0))
+          
 
     # Debug de saída de imagem
     if args.save_output is not None:
       img.save("new_" + args.save_output)
       shutil.move("new_" + args.save_output, args.save_output)
 
-<<<<<<< HEAD
     # Fecha a câmera
-=======
-    stop_time = time.time()
-    #print("time: {:.3f}ms".format((stop_time - start_time) * 1000))
-
->>>>>>> main
     if args.camera is None:
       ##################################################################################
       cap.release()
       ##################################################################################
 
 def sendFaceData_ROI():
-<<<<<<< HEAD
   """
   Método para envio das imagens recortadas de pessoas dentro do leito
   """
@@ -597,34 +419,11 @@ def sendFaceData_hands():
       print(f"Erro ao enviar dados: {e}")
     except Exception as e:
       print(f"Erro inesperado: {e}")
-=======
-  while True:
-    try:
-      item = face_data_queue_ROI.get()  # Use timeout para evitar bloqueio
-      response = requests.post('http://192.168.0.87:8000/upload_ROI', json=item, timeout=5)  # Use json=item para enviar os dados como JSON
-    except face_data_queue_ROI.empty():
-      # Não faz nada se a fila estiver vazia, apenas aguarda
-      continue
-    except requests.exceptions.RequestException as e:
-      print(f"Erro ao enviar dados: {e}")
-
-def sendFaceData_hands():
-  while True:
-    try:
-      item = face_data_queue_hands.get()  # Use timeout para evitar bloqueio
-      response = requests.post('http://192.168.0.87:8000/upload_maos', json=item, timeout=5)  # Use json=item para enviar os dados como JSON
-    except face_data_queue_hands.empty():
-      # Não faz nada se a fila estiver vazia, apenas aguarda
-      continue
-    except requests.exceptions.RequestException as e:
-      print(f"Erro ao enviar dados: {e}")
->>>>>>> main
 
 if __name__ == "__main__":
 
   parser = argparse.ArgumentParser()
   parser.add_argument(
-<<<<<<< HEAD
       "--camera", default=None, type=int, help="Pi camera device to use")
   parser.add_argument(
       "--save_output", default=None, help="Image file to save model output to")
@@ -632,50 +431,6 @@ if __name__ == "__main__":
   args = parser.parse_args()
 
   # Criando threads dos 3 principais métodos do programa
-=======
-      "-i",
-      "--image",
-      default="../images/bus.jpg",
-      help="Input image")
-  parser.add_argument(
-      "-m",
-      "--model_file",
-      default="../models/yolov8n_224_int8.tflite",
-      help="TF Lite model to be executed")
-  parser.add_argument(
-      "-l",
-      "--label_file",
-      default="../models/yolov8_labels.txt",
-      help="name of file containing labels")
-  parser.add_argument(
-      "--input_mean",
-      default=0.0, type=float,
-      help="input_mean")
-  parser.add_argument(
-      "--input_std",
-      default=255.0, type=float,
-      help="input standard deviation")
-  parser.add_argument(
-      "--num_threads", default=2, type=int, help="number of threads")
-  parser.add_argument(
-      "--camera", default=None, type=int, help="Pi camera device to use")
-  parser.add_argument(
-      "--save_input", default=None, help="Image file to save model input to")
-  parser.add_argument(
-      "--save_output", default=None, help="Image file to save model output to")
-  parser.add_argument(
-      "--score_threshold",
-      default=0.6, type=float,
-      help="Score level needed to include results")
-  parser.add_argument(
-      "--output_format",
-      default="yolov8_detect",
-      help="How to interpret the output from the model"
-  )
-
-  args = parser.parse_args()
-
->>>>>>> main
   thread_productor = threading.Thread(target=faceDetect)
   thread_consummer_ROI = threading.Thread(target=sendFaceData_ROI)
   thread_consummer_hands = threading.Thread(target=sendFaceData_hands)
